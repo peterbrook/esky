@@ -75,6 +75,9 @@ if sys.version_info[0] < 3:
 else:
     from io import BytesIO
 
+import logging
+logging.basicConfig(filename=r"c:\patch_output.txt",filemode='w',level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 #  Try to get code for working with bsdiff4-format patches.
 #
@@ -403,6 +406,7 @@ def calculate_digest(target,hash=hashlib.md5):
     If the target is a file, its digest is calculated as normal.  If it is
     a directory, it is calculated from the names and digests of its contents.
     """
+    logger.info("Calculating digest for %s",target)
     d = hash()
     if os.path.isdir(target):
         for nm in sorted(os.listdir(target)):
@@ -414,6 +418,7 @@ def calculate_digest(target,hash=hashlib.md5):
             while data:
                 d.update(data)
                 data = f.read(1024*16)
+    logger.info("Digest for %s : %s",target,d.hexdigest())
     return d.digest()
 
 
@@ -452,15 +457,15 @@ class Patcher(object):
     def _read_int(self):
         """Read an integer from the command stream."""
         i = _read_vint(self.commands)
-        if self.dry_run:
-            print "  ", i
+        if self.dry_run or True:
+            logger.info("  %d", i)
         return i
 
     def _read_command(self):
         """Read the next command to be processed."""
         cmd = _read_vint(self.commands)
-        if self.dry_run:
-            print _COMMANDS[cmd]
+        if True or self.dry_run:
+            logger.info(_COMMANDS[cmd])
         return cmd
 
     def _read_bytes(self):
@@ -480,8 +485,8 @@ class Patcher(object):
         if len(bytes) != l:
             raise PatchError("corrupted path")
         path = bytes.decode("utf-8")
-        if self.dry_run:
-            print "  ", path
+        if True or self.dry_run:
+            logger.info("  %s", path)
         return path
 
     def _check_begin_patch(self):
@@ -601,6 +606,7 @@ class Patcher(object):
             self.target = os.path.join(self.root_dir,path)
         else:
             self.target = self.root_dir
+        logger.info("target set to %s",self.target)
         self._check_path()
 
     def _do_JOIN_PATH(self):
@@ -612,6 +618,7 @@ class Patcher(object):
         self._check_end_patch()
         path = self._read_path()
         self.target = os.path.join(self.target,path)
+        logger.info("target set to %s",self.target)
         self._check_path()
 
     def _do_POP_PATH(self):
@@ -624,6 +631,7 @@ class Patcher(object):
         while self.target.endswith(os.sep):
             self.target = self.target[:-1]
         self.target = os.path.dirname(self.target)
+        logger.info("target set to %s",self.target)
         self._check_path()
 
     def _do_POP_JOIN_PATH(self):
