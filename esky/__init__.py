@@ -582,12 +582,14 @@ class Esky(object):
     def _overwrite(self,src,dst):
         """Directly overwrite file 'dst' with the contents of file 'src'."""
         with open(src,"rb") as fIn:
-            with open(dst,"ab") as fOut:
+            with open(dst,"wb") as fOut:
                 fOut.seek(0)
                 chunk = fIn.read(512*16)
                 while chunk:
                    fOut.write(chunk)
                    chunk = fIn.read(512*16)
+                fOut.flush()
+                os.fsync(fOut.fileno())
 
     @allow_from_sudo()
     def cleanup_at_exit(self):
