@@ -218,6 +218,8 @@ def esky():
         import esky.winres
     return esky
 
+import logging
+logger = logging.getLogger(__name__)
 
 class Esky(object):
     """Class representing an updatable frozen app.
@@ -468,9 +470,11 @@ class Esky(object):
                         if res is not None:
                             success &= res
                     except Exception:
+                        logger.error("Exception while calling {0}".format(act),exc_info=True)
                         act = actions.throw(*sys.exc_info())
                     else:
                         act = actions.next()
+                    logger.debug("Cleanup action: {0}".format(act))
             except StopIteration:
                 return success
         finally:
@@ -496,7 +500,10 @@ class Esky(object):
         is required without duplicating the logic.
         """
         appdir = self.appdir
+        logger.info("_cleanup_actions appdir:{0}".format(appdir))
         vsdir = self._get_versions_dir()
+        logger.info("_cleanup_actions vsdir:{0}".format(vsdir))
+
         best_version = get_best_version(vsdir)
         new_version = get_best_version(vsdir,include_partial_installs=True)
         #  If there's a partial install we must complete it, since it
@@ -529,9 +536,12 @@ class Esky(object):
         # TODO: remove compatability hooks for ESKY_APPDATA_DIR=""
         for tdir in (appdir,vsdir):
             for nm in os.listdir(tdir):
+                logger.info("_cleanup_actions. Checking file {0} in dir {1}".format(nm, tdir))
                 if nm not in manifest:
                     fullnm = os.path.join(tdir,nm)
+                    logger.info("full name:{0}".format(fullnm))
                     if ".old." in nm or nm.endswith(".old"):
+                        logger.info("Old file, adding remove command")
                         #  It's a temporary backup file; remove it.
                         yield (self._try_remove, (tdir,nm,manifest,))
                     elif not os.path.isdir(fullnm):
@@ -563,16 +573,21 @@ class Esky(object):
                             yield (self._try_remove, (tdir,nm,manifest,))
         #  If there are pending overwrites, try to do them.
         ovrdir = os.path.join(vsdir,best_version,ESKY_CONTROL_DIR,"overwrite")
+        logger.info("Overwrite dir: {0}".format(ovrdir))
         if os.path.exists(ovrdir):
+            logger.info("overwrite path exists")
             try:
                 for (dirnm,_,filenms) in os.walk(ovrdir,topdown=False):
+                    logger.info("Overwrite dir loop. Dirname {0} filenames {1}".format(dirnm, filenms))
                     for nm in filenms:
                         ovrsrc = os.path.join(dirnm,nm)
                         ovrdst = os.path.join(appdir,ovrsrc[len(ovrdir)+1:])
                         yield (self._overwrite, (ovrsrc,ovrdst,))
+                        logger.info("Overwrite succeeded. unlinking {0}".format(ovrsrc))
                         yield (os.unlink, (ovrsrc,))
                     yield (os.rmdir, (dirnm,))
             except EnvironmentError:
+                logger.error("Error while processing overwrite", exc_info=True)
                 yield lambda: False
         #  Get the VersionFinder to clean up after itself
         if self.version_finder is not None:
@@ -581,13 +596,16 @@ class Esky(object):
 
     def _overwrite(self,src,dst):
         """Directly overwrite file 'dst' with the contents of file 'src'."""
+        logger.info("Overwriting {0} with {1}".format(dst,src))
         with open(src,"rb") as fIn:
-            with open(dst,"ab") as fOut:
+            with open(dst,"wb") as fOut:
                 fOut.seek(0)
                 chunk = fIn.read(512*16)
                 while chunk:
                    fOut.write(chunk)
                    chunk = fIn.read(512*16)
+                fOut.flush()
+                os.fsync(fOut.fileno())
 
     @allow_from_sudo()
     def cleanup_at_exit(self):
@@ -600,6 +618,7 @@ class Esky(object):
         Recall that sys.executable points to a specific version dir, so this
         new process will not hold any filesystem locks in the main app dir.
         """
+        logger.info("Setting up cleanup_at_exit")
         if self.sudo_proxy is not None:
             self.keep_sudo_proxy_alive = True
             return self.sudo_proxy.cleanup_at_exit()
@@ -626,9 +645,12 @@ class Esky(object):
                     raise OSError(None,"unable to cleanup: startup hooks not run")
                 exe = [exe,"--esky-spawn-cleanup"]
         appdata = pickle.dumps(self,pickle.HIGHEST_PROTOCOL)
+        logger.info("exe:{0}".format(exe))
         exe = exe + [base64.b64encode(appdata).decode("ascii")]
+        logger.info("exe after b64: {0}".format(exe))
         @atexit.register
         def spawn_cleanup():
+            logger.info("Spawning cleanup. exe: {0}".format(exe ))
             rnul = open(os.devnull,"r")
             wnul = open(os.devnull,"w")
             if sys.platform == "win32":
@@ -653,10 +675,13 @@ class Esky(object):
             * if the path appears in the given manifest
 
         """
+        logger.info("Trying to remove {0} {1}".format(tdir,path))
         fullpath = os.path.join(tdir,path)
         if fullpath in sys.path:
+            logger.info("fullpath in sys.path, returning False")
             return False
         if path in manifest:
+            logger.info("path in manifest, returning False")
             return False
         try:
             if os.path.isdir(fullpath):
@@ -670,6 +695,7 @@ class Esky(object):
                     else:
                         subdir = os.path.join(path,nm)
                         success &= self._try_remove(tdir,subdir,manifest)
+                        logger.info("Attempted to remove dir {0} {1}, success is now {2}".format(tdir,subdir,success)) 
                 if not success:
                     return False
                 for nm in sorted(esky_paths):
@@ -680,6 +706,7 @@ class Esky(object):
         except EnvironmentError, e:
             if e.errno not in self._errors_to_ignore:
                 raise
+            logger.error("Error while removing",exc_info=True)
             return False
         else:
             return True
@@ -755,6 +782,7 @@ class Esky(object):
             callback({"status":"done"})
         finally:
             #  Drop root privileges as soon as possible.
+            logger.info("cleaned={0} and needs_cleanup={1}".format(cleaned, self.needs_cleanup()))
             if not cleaned and self.needs_cleanup():
                 self.cleanup_at_exit()
             if got_root:
@@ -1067,9 +1095,24 @@ def run_startup_hooks():
         lock_version_dir(vdir)
     # Run the "spawn-cleanup" hook if given.
     if len(sys.argv) > 1 and sys.argv[1] == "--esky-spawn-cleanup":
-        app = pickle.loads(base64.b64decode(sys.argv[2].encode("ascii")))
-        time.sleep(1)
-        app.cleanup()
+        logging.basicConfig(filename="C:\\esky_dbg_cleanup.txt",level=logging.DEBUG,format="%(asctime)s - %(name)s - %(levelname)s - %(thread)d:%(threadName)s - %(process)d:%(processName)s - %(message)s")
+        logger = logging.getLogger("esky-spawn-cleanup-logger")
+        try:
+            logger.info("In spawned cleanup proc")
+            app = pickle.loads(base64.b64decode(sys.argv[2].encode("ascii")))
+            time.sleep(1)
+            success = app.cleanup()
+            if not success:
+              logger.info("First call failed. trying again")
+              time.sleep(1)
+              success = app.cleanup()
+            if not success:
+              logger.info("sleeping longer")
+              time.sleep(10)
+              success = app.cleanup()
+              logger.info("success? {0}".format(success))
+        except:
+            logger.error("exception",exc_info=True)
         sys.exit(0)
     # Let esky.slaveproc run its hooks.
     import esky.slaveproc
